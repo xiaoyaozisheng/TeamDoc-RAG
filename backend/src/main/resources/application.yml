@@ -1,0 +1,152 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    active: h2
+  datasource:
+    url: jdbc:h2:file:./data/example_db;DB_CLOSE_ON_EXIT=FALSE;AUTO_RECONNECT=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+rag:
+  storage:
+    base-dir: ./data/files
+  embedding:
+    provider: hashing        # hashing（本地确定性，零依赖）| openai（需 API Key）
+    dimensions: 768          # 须与 db/postgres/001_init_vector_store.sql 的 vector(768) 一致
+    openai:
+      base-url: https://api.openai.com
+      model: text-embedding-3-small
+      api-key: ${OPENAI_API_KEY:}
+  llm:
+    provider: extractive     # extractive（离线兜底：基于证据抽取并拒答）| openai
+    openai:
+      base-url: https://api.openai.com
+      model: gpt-4o-mini
+      api-key: ${LLM_API_KEY:}
+      timeout-seconds: 60
+  chunk:
+    max-parent-chars: 1200
+    max-child-chars: 400
+  retrieval:
+    top-k: 5
+    rrf-k: 60
+    vector-candidates: 20
+    keyword-candidates: 20
+    min-relevance: 0.35      # 证据充分性阈值（向量余弦）：低于该值拒答；随 Embedding 模型调整
+  keyword-engine: h2         # h2（LIKE 兜底）| pg（tsvector）
+  pgvector:
+    enabled: false           # postgres Profile 下为 true：向量写入 vector_store 并用 <=> 检索
+  rls:
+    enabled: false           # postgres Profile 下为 true：连接级注入 app.current_tenant 供 RLS 兜底
+  ingestion:
+    max-retries: 3
+    scan-interval-ms: 3000
+
+jwt:
+  secret: ${JWT_SECRET:}
+  expiration: 900000             # AccessToken 15 分钟：JWT 无法服务端作废，泄露后攻击窗口必须短
+  refresh-expiration: 604800000  # RefreshToken 7 天
+  cookie-secure: false           # RefreshToken Cookie 的 Secure 标记；生产（HTTPS）必须为 true
+
+cors:
+  allowed-origins: http://localhost:5173,http://localhost:3000
+
+---
+spring:
+  config:
+    activate:
+      on-profile: mysql
+  datasource:
+    url: jdbc:mysql://localhost:3306/example_db?useSSL=true&requireSSL=true&serverTimezone=UTC&allowPublicKeyRetrieval=false
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: false
+  h2:
+    console:
+      enabled: false
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: postgres
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:teamdoc}
+    username: ${DB_USERNAME:teamdoc}
+    password: ${DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+  h2:
+    console:
+      enabled: false
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+
+jwt:
+  cookie-secure: true
+
+rag:
+  keyword-engine: pg
+  pgvector:
+    enabled: true
+  rls:
+    enabled: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  h2:
+    console:
+      enabled: false
+
+jwt:
+  secret: ${JWT_SECRET:}
+  cookie-secure: true
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
