@@ -5,6 +5,8 @@ import { Dashboard } from './pages/Dashboard';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { ChatPage } from './pages/ChatPage';
 import { EvalPage } from './pages/EvalPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { NotFound } from './pages/NotFound';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { PublicRoute } from './components/PublicRoute';
 
@@ -60,7 +62,15 @@ function App(): React.ReactNode {
             </ProtectedRoute>
           }
         />
-        <Route path="*" element={<Login />} />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <SettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   );

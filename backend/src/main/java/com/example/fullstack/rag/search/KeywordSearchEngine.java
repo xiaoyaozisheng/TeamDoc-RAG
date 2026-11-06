@@ -38,7 +38,9 @@ public interface KeywordSearchEngine {
                 if (term.length() < 2) {
                     continue;
                 }
-                for (com.example.fullstack.entity.Chunk chunk : chunkRepository.searchByTerm(tenantId, term)) {
+                // 转义 LIKE 通配符，防止用户查询注入 %/_ 放大扫描面
+                String escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+                for (com.example.fullstack.entity.Chunk chunk : chunkRepository.searchByTerm(tenantId, escaped)) {
                     int occurrences = countOccurrences(chunk.getContent().toLowerCase(), term.toLowerCase());
                     if (occurrences == 0) {
                         continue;

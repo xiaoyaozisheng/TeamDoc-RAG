@@ -14,6 +14,8 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     List<Document> findByStatusInAndDeletedFalse(List<Document.DocStatus> statuses);
 
+    List<Document> findByStatusAndDeletedFalse(Document.DocStatus status);
+
     Optional<Document> findByIdAndDeletedFalse(Long id);
 
     Optional<Document> findByIdAndTenantIdAndDeletedFalse(Long id, Long tenantId);

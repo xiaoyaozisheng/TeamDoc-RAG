@@ -135,7 +135,9 @@ npm run dev
 | GET  | `/api/v1/auth/me` | 获取当前登录用户信息 |
 
 > **RefreshToken 不在响应体中出现**：登录/注册/刷新通过 `Set-Cookie` 下发 `refresh_token`
-> （`HttpOnly` + `Secure`（生产）+ `SameSite=Strict`，`Path=/api/v1/auth`），JavaScript 无法读取。
+> （`HttpOnly` + `Secure`（可配）+ `SameSite=Strict`，`Path=/api/v1/auth`），JavaScript 无法读取。
+> 数据库仅存 RefreshToken 的 **SHA-256 哈希**（防拖库重放）；令牌携带 `type` claim，
+> RefreshToken 不可当作 API 凭证使用；**已轮换令牌被重放会触发家族撤销**（该用户全部刷新令牌作废）。
 
 ### 租户管理（tenant:manage）
 
@@ -143,6 +145,7 @@ npm run dev
 |------|------|------|
 | GET / POST / PUT | `/api/v1/tenants` | 租户列表 / 创建 / 更新 |
 | PATCH | `/api/v1/tenants/{id}/disable` | 停用租户 |
+| PATCH | `/api/v1/tenants/{id}/enable` | 启用（恢复）租户 |
 
 ### 文档管理（document:*）
 
@@ -162,6 +165,7 @@ npm run dev
 | POST | `/api/v1/retrieval/search` | 混合检索调试：返回片段、文档名、页码、双路得分与 RRF 得分 |
 | POST | `/api/v1/chat/ask` | 问答（JSON）：带引用编号与拒答 |
 | POST | `/api/v1/chat/ask/stream` | 问答（SSE 流式）：event=answer/citations/done |
+| GET | `/api/v1/chat/history` | 当前用户的问答历史（倒序分页） |
 | POST | `/api/v1/chat/feedback` | 回答反馈：USEFUL / USELESS / WRONG_CITATION |
 
 ### 评估与管理（eval:manage / ADMIN）
@@ -174,6 +178,7 @@ npm run dev
 | GET | `/api/v1/admin/logs/retrieval` | 检索日志（按租户/时间筛选） |
 | GET | `/api/v1/admin/logs/audit` | 审计日志（登录/文档删除等） |
 | GET | `/api/v1/admin/providers` | Embedding/LLM Provider 配置（密钥脱敏） |
+| PUT | `/api/v1/admin/providers` | 运行时更新 Provider 配置与 Reranker 开关（持久化 + 热生效；Embedding 侧变更返回 reindexRequired） |
 
 > 所有业务接口的 `tenant_id` 均取自认证上下文（JWT → 用户 → 租户），客户端传入的租户 ID 不作为过滤依据。
 
@@ -182,8 +187,9 @@ npm run dev
 | 方法 | 路径 | 权限 | 描述 |
 |------|------|------|------|
 | GET  | `/api/v1/users/me` | 需认证 | 获取当前用户资料 |
+| PUT  | `/api/v1/users/me/password` | 需认证 | **自助修改密码**（验证原密码；成功后撤销全部刷新令牌，所有设备重新登录） |
 | GET  | `/api/v1/users` | `admin:read` 或 ADMIN | 获取用户列表 |
-| GET  | `/api/v1/users/{id}` | `user:read`、ADMIN 或本人 | 根据ID获取用户（防水平越权） |
+| GET  | `/api/v1/users/{id}` | `user:read`、ADMIN 或本人 | 根据ID获取用户（防水平越权；跨租户返回 404） |
 | PUT  | `/api/v1/users/{id}` | `user:update` 或 ADMIN | 更新用户信息 |
 | DELETE | `/api/v1/users/{id}` | `user:delete` 或 ADMIN | 删除用户 |
 
@@ -268,20 +274,25 @@ npm run dev
 - **无状态**：服务端不存储会话，扩展性强
 - **双令牌机制**：
   - **AccessToken**：短期有效（默认 **15 分钟**），用于 API 鉴权。JWT 无法从服务端单方面作废，有效期必须短以压缩泄露后的攻击窗口
-  - **RefreshToken**：7 天有效，持久化存储于数据库，**只通过 HttpOnly Cookie 传输**
+  - **RefreshToken**：7 天有效，持久化存储于数据库（**仅存 SHA-256 哈希**），**只通过 HttpOnly Cookie 传输**
+- **类型隔离**：令牌携带 `type` claim（access/refresh），RefreshToken 不可当作 API 凭证使用，反之亦然
 - **令牌撤销**：刷新令牌时旧令牌自动标记为 `revoked=true`（轮换）
+- **重用检测**：已轮换的 RefreshToken 被重放 → 立即撤销该用户全部刷新令牌并写入审计日志（家族保护）
+- **密钥管控**：postgres/prod Profile 下 JWT_SECRET 缺失或过弱（<32 字符）**拒绝启动**；开发 Profile 使用默认密钥并告警
 - **并发控制**：每个用户最多 5 个有效 RefreshToken，超出自动淘汰最早的一个
 
 ### Token 存储策略（防 XSS）
 - **AccessToken**：前端保存在 `sessionStorage`（标签页关闭即失效）
-- **RefreshToken**：`HttpOnly` + `Secure`（生产）+ `SameSite=Strict` Cookie，`Path=/api/v1/auth`，JavaScript 完全不可读
+- **RefreshToken**：`HttpOnly` + `Secure`（可由 `COOKIE_SECURE` 控制）+ `SameSite=Strict` Cookie，`Path=/api/v1/auth`，JavaScript 完全不可读
 - 刷新/登出请求依赖浏览器自动携带 Cookie，前端不接触 RefreshToken
 
 ### 访问控制
 - **方法级权限**：`@PreAuthorize` 逐操作声明（`role:create` ≠ `role:read`），`@EnableMethodSecurity` 已开启
-- **水平越权防护**：`GET /users/{id}` 仅允许本人、`user:read` 权限或 ADMIN 访问
+- **水平越权防护**：`GET /users/{id}` 仅允许本人、`user:read` 权限或 ADMIN 访问；**user:read 持有者只能查看本租户用户**（跨租户 404，不泄露存在性）
+- **内置角色保护**：ROLE_ADMIN / ROLE_USER 不可改名或删除
 - **CSRF**：无状态 JWT API **显式禁用** CSRF（令牌在 `Authorization` 头中，浏览器不会自动携带，无 CSRF 攻击面）。RefreshToken Cookie 使用 `SameSite=Strict` 提供跨站防护，因此刷新接口无需额外 CSRF token
-- **统一异常处理**：全局 `@RestControllerAdvice` 处理所有异常
+- **统一异常处理**：全局 `@RestControllerAdvice` 处理所有异常；JWT 过期/伪造统一 401（过滤器捕获，不产生 500）
+- **开发端点门控**：H2 控制台与 Swagger 仅在开发 Profile 开放（`security.dev-endpoints-enabled`），postgres/prod 默认关闭
 
 ### Token 自动刷新机制（前端）
 
@@ -339,7 +350,13 @@ rag:
     provider: hashing        # hashing（本地确定性零依赖）| openai（兼容任意 OpenAI 风格网关）
   llm:
     provider: extractive     # extractive（离线兜底：片段内最佳句 + 拒答）| openai
+  retrieval:
+    reranker-enabled: false  # RET-07：重排开关；开启后对融合候选（rerank-candidates，默认20）重排取 top-k
 ```
+
+Provider 配置也支持运行时修改：系统管理员在「系统管理」页面或经 `PUT /api/v1/admin/providers`
+调整 Provider/模型/密钥/重排开关，配置持久化到 `app_settings` 表（重启自动恢复）、立即热生效、
+密钥只回传脱敏值；Embedding 侧变更会返回 `reindexRequired=true`，需对各文档执行重新入库。
 
 生产建议：Embedding 换 `bge-small-zh` ONNX 或云端 API（实现 `EmbeddingProvider` 接口即可，流水线零改动）；LLM 换任意 OpenAI 兼容端点。检索 Recall 未达标前不要调 Prompt——先看 `retrieval_logs`、调切片参数（`rag.chunk.*`）和检索参数（`rag.retrieval.*`）。
 
@@ -377,7 +394,8 @@ jwt:
 |--------|------|--------|
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | PostgreSQL 连接信息（postgres Profile） | `localhost` / `5432` / `teamdoc` |
 | `DB_USERNAME` / `DB_PASSWORD` | 数据库凭据 | - |
-| `JWT_SECRET` | JWT 密钥（生产必填） | - |
+| `JWT_SECRET` | JWT 密钥（**postgres/prod Profile 必填**，≥32 字符，否则拒绝启动） | - |
+| `COOKIE_SECURE` | RefreshToken Cookie 的 Secure 标记（纯 HTTP 的 Compose 部署设为 false，有 TLS 的生产必须为 true） | postgres/prod 下 `true` |
 | `CORS_ALLOWED_ORIGINS` | 允许的跨域来源 | `http://localhost:5173` |
 | `OPENAI_API_KEY` | Embedding/LLM 云端密钥（`rag.*.provider=openai` 时） | - |
 | `LLM_API_KEY` | LLM 专用密钥 | - |
@@ -425,16 +443,18 @@ mvn test
 
 ```bash
 cd backend
-mvn test     # 30 个测试
+mvn test     # 47 个测试
 ```
 
-测试覆盖（对应 PRD 验收标准 11.1）：
+测试覆盖（对应 PRD 验收标准 11.1 + P1 交付项）：
 
 | 测试类 | 覆盖 |
 |--------|------|
 | `RrfFuserTest` | RRF 融合纯函数（排名合并、TopK、空输入） |
+| `LexicalRerankProviderTest` | Reranker 重排（相关片段提升、TopK、元数据保留、bigram 边界） |
 | `RagFlowIntegrationTest` | 全链路：上传入库 → 混合检索 → 问答引用 → 负样本拒答 → **跨租户隔离** → 删除后不可召回 → 评估指标（Recall@5/拒答率） → 权限矩阵 403 |
 | `AuthControllerTest` / `AuthControllerWebMvcTest` | 认证闭环：注册/登录/Cookie 刷新/无 Cookie 401 |
+| `AccountAndProviderConfigTest` | P1 交付项：自助改密（旧密码校验/令牌撤销/新密码登录）、RefreshToken 哈希落库、令牌类型隔离、重放触发家族撤销、PUT /admin/providers（热生效/reindexRequired/校验/403/脱敏） |
 | `UserRepositoryTest` | 数据层 |
 
 > RAG 全链路测试运行在独立内存库 `jdbc:h2:mem:ragflow`，与其他测试和开发数据隔离，可重复执行。
@@ -462,9 +482,10 @@ mvn test     # 30 个测试
 - [x] M0 安全修复（权限拆分、令牌有效期、Cookie 化、越权防护）
 - [x] Flowable 移除（知识库场景无审批流需求）
 - [x] M1 数据底座与租户（PostgreSQL/pgvector 脚本、租户模型、应用层过滤 + RLS 兜底）
-- [x] M2 文档入库（PDF/MD/TXT/DOCX 解析、父子切片、Embedding、异步 Worker、失败重试）
+- [x] M2 文档入库（PDF/MD/TXT/DOCX 解析、父子切片、Embedding、异步 Worker、失败重试、PROCESSING 卡死回收）
 - [x] M3 检索闭环（向量 + 全文 + RRF、检索日志、评估集基线）
-- [x] M4 问答与溯源（SSE 流式、引用标注、拒答、反馈）
+- [x] M4 问答与溯源（SSE 流式、引用标注、拒答、反馈、问答历史）
 - [x] M5 评估与加固（黄金集 CRUD、批量评估、审计日志、Docker Compose）
-- [ ] P1：Reranker、多轮对话、SSO/OIDC、MinIO 对象存储、云端 Embedding/LLM 接入
+- [x] P1 加固批（2026-11-06）：自助改密、RefreshToken SHA-256 哈希 + 类型隔离 + 重放家族撤销、Provider 运行时配置（PUT + 持久化 + 脱敏）、词面 Reranker 开关（RET-07）、JWT 密钥 fail-fast、开发端点门控、SSE 租户上下文修复、RLS 脚本 missing_ok 修复
+- [ ] P2：Reranker 交叉编码器模型、多轮对话上下文记忆、SSO/OIDC、MinIO 对象存储、扫描件 OCR
 

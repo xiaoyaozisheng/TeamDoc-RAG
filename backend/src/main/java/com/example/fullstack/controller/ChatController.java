@@ -54,17 +54,33 @@ public class ChatController {
         return chatService.ask(user.getTenant(), user, request.getQuestion());
     }
 
+    @Operation(summary = "问答历史（CHAT-06）：当前用户的问答记录倒序分页")
+    @GetMapping("/history")
+    public List<ChatService.HistoryItem> history(@AuthenticationPrincipal User user,
+                                                 @RequestParam(defaultValue = "0") int page,
+                                                 @RequestParam(defaultValue = "20") int size) {
+        return chatService.history(user.getTenant(), user, page, size);
+    }
+
     @Operation(summary = "问答（SSE 流式，CHAT-01）：event=answer 增量 / citations 引用 / done 结束")
     @PostMapping(value = "/ask/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter askStream(@AuthenticationPrincipal User user,
                                 @Valid @RequestBody AskRequest request) {
         SseEmitter emitter = new SseEmitter(120_000L);
+        // 在请求线程（OSIV 存活）内捕获租户，避免跨线程访问懒加载代理
+        com.example.fullstack.entity.Tenant tenant = user.getTenant();
+        Long tenantId = tenant == null ? null : tenant.getId();
         var executor = Executors.newSingleThreadExecutor();
+        emitter.onTimeout(emitter::complete);
         executor.execute(() -> {
             try {
-                // 检索先行，先推送引用让前端可渲染来源
-                List<ScoredChunk> hits = retrievalService.search(user.getTenant(), request.getQuestion());
-                ChatService.ChatAnswer answer = chatService.ask(user.getTenant(), user, request.getQuestion());
+                // SSE 异步线程没有请求上下文：手动注入租户上下文，RLS 会话变量随连接注入才不会报错
+                if (tenantId != null) {
+                    com.example.fullstack.security.TenantContextHolder.set(tenantId);
+                }
+                // 检索一次，引用先推、生成复用同一份命中（避免双倍检索与重复检索日志）
+                List<ScoredChunk> hits = retrievalService.search(tenant, request.getQuestion());
+                ChatService.ChatAnswer answer = chatService.ask(tenant, user, request.getQuestion(), hits);
 
                 String text = answer.answer();
                 int step = 24;
@@ -80,6 +96,7 @@ public class ChatController {
             } catch (Exception e) {
                 emitter.completeWithError(e);
             } finally {
+                com.example.fullstack.security.TenantContextHolder.clear();
                 executor.shutdown();
             }
         });

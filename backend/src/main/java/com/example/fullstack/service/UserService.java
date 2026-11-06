@@ -7,6 +7,7 @@ import com.example.fullstack.dto.UserResponse;
 import com.example.fullstack.entity.Permission;
 import com.example.fullstack.entity.Role;
 import com.example.fullstack.entity.User;
+import com.example.fullstack.exception.ResourceAlreadyExistsException;
 import com.example.fullstack.exception.ResourceNotFoundException;
 import com.example.fullstack.repository.RoleRepository;
 import com.example.fullstack.repository.UserRepository;
@@ -39,6 +40,23 @@ public class UserService {
         return mapToUserResponse(user);
     }
 
+    /**
+     * 供 GET /users/{id} 使用：防水平越权——user:read 持有者也只能查看本租户用户，
+     * 非本租户返回 404（不泄露存在性）；ADMIN 可看全部。
+     */
+    public UserResponse getUserByIdForCaller(Long id, User caller) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+        boolean isAdmin = caller.getAuthorities().stream()
+                .anyMatch(auth -> "ROLE_ADMIN".equals(auth.getAuthority()));
+        boolean sameTenant = caller.getTenant() != null && user.getTenant() != null
+                && caller.getTenant().getId().equals(user.getTenant().getId());
+        if (!isAdmin && !sameTenant) {
+            throw new ResourceNotFoundException("用户不存在");
+        }
+        return mapToUserResponse(user);
+    }
+
     public UserResponse getUserByEmail(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
@@ -51,6 +69,10 @@ public class UserService {
                 .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
 
         if (request.getDisplayName() != null) {
+            if (!request.getDisplayName().equals(user.getDisplayName())
+                    && userRepository.existsByDisplayName(request.getDisplayName())) {
+                throw new ResourceAlreadyExistsException("用户名已被使用");
+            }
             user.setDisplayName(request.getDisplayName());
         }
 

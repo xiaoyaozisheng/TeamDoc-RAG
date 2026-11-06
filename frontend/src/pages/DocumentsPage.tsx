@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Modal } from 'antd';
 import { DocumentItem } from '../types';
 import { documentService } from '../services/rag';
 import { NavBar } from '../components/NavBar';
@@ -63,14 +64,24 @@ export const DocumentsPage = (): React.ReactNode => {
     }
   };
 
-  const onDelete = async (id: number): Promise<void> => {
-    setError(null);
-    try {
-      await documentService.remove(id);
-      await refresh();
-    } catch {
-      setError('删除失败');
-    }
+  const onDelete = (doc: DocumentItem): void => {
+    // 删除不可恢复（切块与向量同步清理），必须二次确认
+    Modal.confirm({
+      title: '确认删除文档？',
+      content: `「${doc.name}」将被删除，其切块与向量同步清理，删除后不可再被检索召回。`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setError(null);
+        try {
+          await documentService.remove(doc.id);
+          await refresh();
+        } catch {
+          setError('删除失败');
+        }
+      },
+    });
   };
 
   return (
@@ -146,7 +157,7 @@ export const DocumentsPage = (): React.ReactNode => {
                     重新入库
                   </button>
                   <button
-                    onClick={() => void onDelete(doc.id)}
+                    onClick={() => onDelete(doc)}
                     className="px-2 py-1 text-xs rounded bg-red-50 text-red-600 hover:bg-red-100"
                   >
                     删除

@@ -32,4 +32,11 @@ export const authService = {
     const response = await api.get<UserResponse>('/v1/auth/me');
     return response.data;
   },
+
+  /** 自助修改密码：成功后所有设备的刷新令牌被撤销（后端强制），本机也需重新登录 */
+  changePassword: async (oldPassword: string, newPassword: string): Promise<void> => {
+    await api.put('/v1/users/me/password', { oldPassword, newPassword });
+    storage.clearTokens();
+    window.location.href = '/login';
+  },
 };

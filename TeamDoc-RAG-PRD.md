@@ -407,22 +407,36 @@ MVP 全部 P0 需求已实现并通过 30 个自动化测试（后端）+ 端到
 |---|---|---|
 | RET-01~05 | ✅ | 双路召回（pgvector HNSW / 内存余弦 + tsvector / LIKE 兜底）+ RRF + 检索日志 |
 | RET-06 | ✅ | 评估集批量跑 Recall@5，对比混合检索；**正式 ≥0.80 基线需按租户建 30–50 题后执行** |
-| RET-07 | ⏳ P1 | Reranker 未实现 |
+| RET-07 | ✅（2026-11-06） | 词面 Reranker 已实现：`rag.retrieval.reranker-enabled` 可配置开关（默认关），对融合候选（rerank-candidates=20）做字符 bigram 覆盖率重排取 TopK；`RerankProvider` 接口可替换为交叉编码器模型 |
 | CHAT-01 | ✅ | SSE 流式（event=answer/citations/done）+ 同步 JSON 双模式 |
 | CHAT-02~04 | ✅ | 引用编号可点击定位文档/页码；证据约束 Prompt；余弦阈值拒答（默认 0.35，随 Embedding 模型校准） |
 | CHAT-05 | ✅ | `LlmProvider`/`EmbeddingProvider` 适配层；默认 extractive（离线兜底）/ hashing（本地确定性），可切 OpenAI 兼容端点或自研实现 |
-| CHAT-06 | ✅ | 有用/无用/引用错误反馈入库 |
+| CHAT-06 | ✅ | 有用/无用/引用错误反馈入库；**问答历史 `GET /chat/history` 已补齐**（2026-11-06） |
 | CHAT-07 | ✅ | 片段级上下文上限 1200 字、SSE 超时 120s |
 | EVA-01~04 | ✅ | 黄金集 CRUD（含负样本）、批量评估（Recall@5 + 拒答准确率）、历史对比、检索日志按租户/时间筛选 |
-| SYS-01~06 | ✅ | SYS-03 通过环境变量/配置文件修改 + 接口脱敏查看（PUT 接口未做，P1）；SYS-06 Flowable 已移除 |
+| SYS-01~06 | ✅ | SYS-03 **PUT /admin/providers 已实现**（2026-11-06）：运行时热切换 + `app_settings` 持久化 + 密钥脱敏 + reindexRequired 标记；SYS-06 Flowable 已移除 |
 
 **与 PRD 技术约束的偏差（已评审接受）**
 
 1. **Embedding 未用 bge-small-zh ONNX 起步**：本地无模型服务与 GPU 依赖诉求，MVP 默认本地确定性 hashing Embedding（字符 bigram 特征哈希），接口可替换，切 bge/OpenAI 零改动；拒答阈值随模型校准。
 2. **未引入 Spring AI**：Spring AI 1.x 要求 Spring Boot 3.4+，为保留 PRD 指定的 3.2.5 基座，pgvector 通过自研双引擎（内存/pgvector SQL）接入，行为对齐 RET-01~04。
-3. **异步队列用文档状态字段 + 定时 Worker**（PRD 技术约束即如此约定），未引入消息队列。
-4. **`refresh_token` 表存令牌原文**（PRD 数据模型为 token_hash）：令牌本身为签名 JWT 且仅在 HttpOnly Cookie 中流转；静态加密哈希列为 P1 加固项。
+3. **异步队列用文档状态字段 + 定时 Worker**（PRD 技术约束即如此约定），未引入消息队列；2026-11-06 补齐 PROCESSING 卡死状态启动回收。
+4. ~~**`refresh_token` 表存令牌原文**~~ **已修复（2026-11-06）**：改为仅存 SHA-256 哈希，并叠加令牌类型隔离（access/refresh claim）与重放家族撤销；自动化测试覆盖。
 5. **本机无 Docker/PostgreSQL**：Compose 与 pgvector 路径按约定交付并经 H2 等价实现全链路测试，首次 PG 部署后需执行 002 脚本并按附录 13.2 样例建 30–50 题黄金集完成 2.1 节指标验收。
+
+**安全加固批（2026-11-06，P1 交付 + 全面代码审查修复）**
+
+| 项 | 内容 |
+|---|---|
+| 自助改密（P1） | `PUT /users/me/password`：验证原密码 → 更新 → 撤销全部刷新令牌 + 审计 |
+| RefreshToken 哈希（P1 加固） | 库中仅存 SHA-256；类型隔离防 RefreshToken 当作 API 凭证；已轮换令牌重放触发家族撤销 |
+| Provider 运行时配置（P1） | `PUT /admin/providers`：热生效 + 持久化 + 脱敏 + reindexRequired；词面 Reranker 开关（RET-07） |
+| JWT 密钥管控 | postgres/prod Profile 下 JWT_SECRET 缺失/弱密钥拒绝启动（fail-fast） |
+| P0-RLS 兼容修复 | 002 脚本改 `current_setting(..., true)` + COALESCE：Worker/SSE 等无租户上下文线程不再报错，业务用户仍被租户过滤；SSE 异步线程显式注入租户上下文 |
+| P0-Cookie 兼容修复 | `COOKIE_SECURE` 环境变量化：纯 HTTP 的 Compose 部署可关闭 Secure（有 TLS 的生产必须 true）；Compose 强制显式 JWT_SECRET |
+| 越权与输入校验 | `GET /users/{id}` 跨租户返回 404；内置角色禁改名/删除；租户改名查重；上传空文件/超长文件名校验；LIKE 通配符转义；未知 JSON 字段/请求体错误/参数类型错误统一 400 |
+| 可靠性 | 入库切块删除改 bulk @Modifying（Worker 线程可靠）；OpenAI Provider 超时生效/分批请求/维度校验/改密钥后客户端重建；未认证统一 401（前端刷新闭环可触发） |
+| 前端 | 自助改密弹窗、系统管理页（Provider 配置 + Reranker 开关）、问答历史恢复、反馈按钮态、删除二次确认、SSE 解析修复 + 401 静默刷新重试、路由 NotFound 修正、NavLink 替换全页跳转 |
 
 ---
 

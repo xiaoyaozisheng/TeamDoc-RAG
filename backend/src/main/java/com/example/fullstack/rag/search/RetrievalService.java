@@ -32,6 +32,7 @@ public class RetrievalService {
     private final RetrievalLogRepository retrievalLogRepository;
     private final RagProperties properties;
     private final ObjectMapper objectMapper;
+    private final RerankProvider rerankProvider;
 
     public List<ScoredChunk> search(Tenant tenant, String query) {
         long start = System.currentTimeMillis();
@@ -43,7 +44,14 @@ public class RetrievalService {
         List<ScoredChunk> keywordHits = keywordSearchEngine.search(
                 tenant.getId(), query, cfg.getKeywordCandidates());
 
-        List<ScoredChunk> fused = RrfFuser.fuse(vectorHits, keywordHits, cfg.getRrfK(), cfg.getTopK());
+        // RET-07：开启重排时先融合出更多候选（rerankCandidates），重排后再取 topK
+        int fusedK = cfg.isRerankerEnabled()
+                ? Math.max(cfg.getTopK(), cfg.getRerankCandidates())
+                : cfg.getTopK();
+        List<ScoredChunk> fused = RrfFuser.fuse(vectorHits, keywordHits, cfg.getRrfK(), fusedK);
+        if (cfg.isRerankerEnabled()) {
+            fused = rerankProvider.rerank(query, fused, cfg.getTopK());
+        }
 
         long latency = System.currentTimeMillis() - start;
         logRetrieval(tenant, query, fused, vectorHits.size() + keywordHits.size(), latency);

@@ -6,8 +6,11 @@ import com.example.fullstack.repository.DocumentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -25,6 +28,22 @@ public class IngestionWorker {
     private final DocumentRepository documentRepository;
     private final IngestionService ingestionService;
     private final RagProperties properties;
+
+    /** 启动时回收 PROCESSING 卡死状态：上次进程崩溃/重启遗留的"处理中"文档不可能再被推进 */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void recoverInterruptedDocuments() {
+        List<Document> stuck = documentRepository.findByStatusAndDeletedFalse(Document.DocStatus.PROCESSING);
+        if (stuck.isEmpty()) {
+            return;
+        }
+        for (Document document : stuck) {
+            document.setStatus(Document.DocStatus.FAILED);
+            document.setErrorMsg("服务重启导致处理中断，请等待自动重试或手动 reindex");
+        }
+        documentRepository.saveAll(stuck);
+        log.warn("回收了 {} 个因服务重启卡在 PROCESSING 的文档", stuck.size());
+    }
 
     @Scheduled(fixedDelayString = "${rag.ingestion.scan-interval-ms:3000}")
     public void scan() {

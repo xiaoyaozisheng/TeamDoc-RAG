@@ -2,9 +2,11 @@ package com.example.fullstack.repository;
 
 import com.example.fullstack.entity.Chunk;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -13,7 +15,14 @@ public interface ChunkRepository extends JpaRepository<Chunk, Long> {
 
     List<Chunk> findByDocumentId(Long documentId);
 
-    void deleteByDocumentId(Long documentId);
+    /**
+     * 批量删除（ING-06 幂等重建）：必须为 bulk @Modifying 删除并自带事务——
+     * 派生 deleteBy 会逐实体 em.remove，在无 OSIV 的 Worker 定时线程上行为不可靠。
+     */
+    @Modifying
+    @Transactional
+    @Query("delete from Chunk c where c.document.id = :documentId")
+    void deleteByDocumentId(@Param("documentId") Long documentId);
 
     /** 检索候选：本租户下所有携带向量的子块（文档未删除） */
     @Query("select c from Chunk c join c.document d " +

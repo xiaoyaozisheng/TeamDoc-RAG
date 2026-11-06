@@ -46,6 +46,11 @@ public class TenantController {
     public Map<String, Object> update(@PathVariable Long id, @Valid @RequestBody TenantRequest request) {
         Tenant tenant = tenantRepository.findById(id)
                 .orElseThrow(() -> new com.example.fullstack.exception.ResourceNotFoundException("租户不存在"));
+        // 改名查重：避免唯一约束冲突直接 500
+        if (request.getName() != null && !request.getName().equals(tenant.getName())
+                && tenantRepository.existsByName(request.getName())) {
+            throw new ResourceAlreadyExistsException("租户名称已存在");
+        }
         tenant.setName(request.getName());
         return toMap(tenantRepository.save(tenant));
     }
@@ -56,6 +61,15 @@ public class TenantController {
         Tenant tenant = tenantRepository.findById(id)
                 .orElseThrow(() -> new com.example.fullstack.exception.ResourceNotFoundException("租户不存在"));
         tenant.setStatus(Tenant.TenantStatus.DISABLED);
+        return toMap(tenantRepository.save(tenant));
+    }
+
+    @Operation(summary = "启用租户（恢复停用的租户）")
+    @PatchMapping("/{id}/enable")
+    public Map<String, Object> enable(@PathVariable Long id) {
+        Tenant tenant = tenantRepository.findById(id)
+                .orElseThrow(() -> new com.example.fullstack.exception.ResourceNotFoundException("租户不存在"));
+        tenant.setStatus(Tenant.TenantStatus.ACTIVE);
         return toMap(tenantRepository.save(tenant));
     }
 

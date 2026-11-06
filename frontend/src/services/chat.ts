@@ -11,15 +11,32 @@ export interface StreamHandlers {
   onError: (message: string) => void;
 }
 
+/** 用 HttpOnly Cookie 静默刷新 AccessToken（fetch 场景无法走 axios 拦截器） */
+const refreshAccessToken = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(`${baseURL}/v1/auth/refresh-token`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const data = await response.json();
+    storage.setAccessToken(data.accessToken);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * SSE 流式问答（CHAT-01）：POST + ReadableStream 解析 text/event-stream。
- * AccessToken 经 Authorization 头携带；异常时降级走同步 JSON 接口由调用方处理。
+ * 401 时静默刷新令牌并重试一次；异常时由调用方降级处理。
  */
 export const streamAsk = async (question: string, handlers: StreamHandlers): Promise<void> => {
-  const token = storage.getAccessToken();
-  let response: Response;
-  try {
-    response = await fetch(`${baseURL}/v1/chat/ask/stream`, {
+  const attempt = async (): Promise<Response> => {
+    const token = storage.getAccessToken();
+    return fetch(`${baseURL}/v1/chat/ask/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -27,6 +44,14 @@ export const streamAsk = async (question: string, handlers: StreamHandlers): Pro
       },
       body: JSON.stringify({ question }),
     });
+  };
+
+  let response: Response;
+  try {
+    response = await attempt();
+    if (response.status === 401 && (await refreshAccessToken())) {
+      response = await attempt();
+    }
   } catch {
     handlers.onError('网络异常，请稍后重试');
     return;
@@ -42,7 +67,7 @@ export const streamAsk = async (question: string, handlers: StreamHandlers): Pro
   let buffer = '';
 
   const dispatch = (raw: string): void => {
-    // SSE 事件以空行分隔；data: 前缀为负载
+    // SSE 事件以空行分隔；data: 前缀为负载（服务端发送的是纯文本块，无需 JSON 解析）
     const dataLines = raw
       .split('\n')
       .filter((line) => line.startsWith('data:'))
@@ -53,7 +78,7 @@ export const streamAsk = async (question: string, handlers: StreamHandlers): Pro
     const payload = dataLines.join('\n');
     const eventName = raw.split('\n').find((line) => line.startsWith('event:'))?.slice(6).trim() ?? 'answer';
     if (eventName === 'answer') {
-      handlers.onAnswerChunk(JSON.parse(`"${payload.replace(/"/g, '\\"')}"`));
+      handlers.onAnswerChunk(payload);
     } else if (eventName === 'citations') {
       try {
         handlers.onCitations(JSON.parse(payload));
@@ -91,8 +116,25 @@ export const streamAsk = async (question: string, handlers: StreamHandlers): Pro
   }
 };
 
+export interface ChatHistoryItem {
+  id: number;
+  question: string;
+  answer: string;
+  citations: Citation[];
+  rating: 'NONE' | 'USEFUL' | 'USELESS' | 'WRONG_CITATION';
+  createdAt: string | null;
+}
+
 export const chatService = {
   feedback: async (conversationId: number, rating: string, comment?: string): Promise<void> => {
     await api.post('/v1/chat/feedback', { conversationId, rating, comment });
+  },
+
+  /** 问答历史（CHAT-06）：刷新页面后恢复历史会话 */
+  history: async (page = 0, size = 20): Promise<ChatHistoryItem[]> => {
+    const response = await api.get<ChatHistoryItem[]>('/v1/chat/history', {
+      params: { page, size },
+    });
+    return response.data;
   },
 };

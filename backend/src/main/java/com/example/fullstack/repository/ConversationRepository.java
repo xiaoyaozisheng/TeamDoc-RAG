@@ -12,5 +12,8 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
 
     List<Conversation> findByTenantIdOrderByCreatedAtDesc(Long tenantId, org.springframework.data.domain.Pageable pageable);
 
+    org.springframework.data.domain.Page<Conversation> findByTenantIdAndUserIdOrderByCreatedAtDesc(
+            Long tenantId, Long userId, org.springframework.data.domain.Pageable pageable);
+
     Optional<Conversation> findByIdAndTenantId(Long id, Long tenantId);
 }

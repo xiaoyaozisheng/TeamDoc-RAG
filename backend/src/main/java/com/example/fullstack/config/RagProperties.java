@@ -69,6 +69,10 @@ public class RagProperties {
         private int keywordCandidates = 20;
         /** 证据充分性阈值（向量余弦相似度）：低于该值拒答（CHAT-04） */
         private double minRelevance = 0.35;
+        /** RET-07：重排开关（默认关闭；开启后对 Top N 重排取 TopK） */
+        private boolean rerankerEnabled = false;
+        /** 送入重排的候选数（RRF 融合先取这么多，再重排取 topK） */
+        private int rerankCandidates = 20;
     }
 
     @Data

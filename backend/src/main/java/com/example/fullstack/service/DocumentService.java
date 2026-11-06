@@ -38,9 +38,15 @@ public class DocumentService {
     private final AuditService auditService;
 
     public DocumentResponse upload(Tenant tenant, User uploader, MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("不能上传空文件");
+        }
         String filename = file.getOriginalFilename();
         if (filename == null || filename.isBlank()) {
             throw new IllegalArgumentException("文件名不能为空");
+        }
+        if (filename.length() > 200) {
+            throw new IllegalArgumentException("文件名过长（最多 200 字符）");
         }
         String extension = filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
         if (!ALLOWED_EXTENSIONS.contains(extension)) {
@@ -85,7 +91,7 @@ public class DocumentService {
         return toResponse(documentRepository.findById(documentId).orElse(document));
     }
 
-    /** 删除（软删）+ 切块/向量同步清理：删除后不再被检索召回（验收 11.1）。单事务保证一致性 */
+    /** 删除（软删）+ 切块/向量同步清理 + 物理文件清理：删除后不再被检索召回（验收 11.1）。单事务保证一致性 */
     @org.springframework.transaction.annotation.Transactional
     public void delete(Tenant tenant, User operator, Long documentId) {
         Document document = findOwnedDocument(tenant, documentId);
@@ -96,6 +102,12 @@ public class DocumentService {
         chunkRepository.deleteByDocumentId(document.getId());
         auditService.log(tenant, operator.getId(), "DOCUMENT_DELETE",
                 "documentId=" + documentId + ", name=" + document.getName());
+        // 物理文件清理（best-effort，软删后下载路径已不可达，残留仅占磁盘）
+        try {
+            storageService.delete(document.getStorageKey());
+        } catch (Exception e) {
+            log.warn("文档物理文件删除失败（可人工清理）: {}", document.getStorageKey(), e);
+        }
         log.info("文档已删除: tenant={}, doc={}", tenant.getId(), documentId);
     }
 

@@ -46,8 +46,11 @@ public class ChatService {
     private final ObjectMapper objectMapper;
 
     public ChatAnswer ask(Tenant tenant, User user, String question) {
-        List<ScoredChunk> hits = retrievalService.search(tenant, question);
+        return ask(tenant, user, question, retrievalService.search(tenant, question));
+    }
 
+    /** SSE 流式路径：检索已由调用方完成（避免同一问题双倍检索 + 重复检索日志） */
+    public ChatAnswer ask(Tenant tenant, User user, String question, List<ScoredChunk> hits) {
         // 证据不足拒答（CHAT-04）：RRF 是排名型分数，不反映相关度绝对值，
         // 证据充分性用向量余弦相似度判据（两路都无命中时必然为 0）
         double bestRelevance = hits.stream()
@@ -99,15 +102,23 @@ public class ChatService {
         return prompt.toString();
     }
 
-    /** 引用（CHAT-02）：LLM 输出中出现的编号才进入引用列表，保证引用准确率 */
+    /** 引用（CHAT-02）：用正则精确提取 [N] 编号（避免子串误匹配），仅收录落在命中范围内的编号 */
+    private static final java.util.regex.Pattern CITATION_PATTERN = java.util.regex.Pattern.compile("\\[(\\d{1,2})]");
+
     private List<Citation> buildCitations(List<ScoredChunk> hits, String answer) {
-        List<Citation> citations = new ArrayList<>();
-        for (int i = 0; i < hits.size(); i++) {
-            if (answer.contains("[" + (i + 1) + "]")) {
-                ScoredChunk hit = hits.get(i);
-                citations.add(new Citation(
-                        hit.chunkId(), hit.documentId(), hit.documentName(), hit.pageNumber(), i + 1));
+        java.util.Set<Long> citedIndexes = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher matcher = CITATION_PATTERN.matcher(answer);
+        while (matcher.find()) {
+            int idx = Integer.parseInt(matcher.group(1));
+            if (idx >= 1 && idx <= hits.size()) {
+                citedIndexes.add((long) idx);
             }
+        }
+        List<Citation> citations = new ArrayList<>();
+        for (long idx : citedIndexes) {
+            ScoredChunk hit = hits.get((int) idx - 1);
+            citations.add(new Citation(
+                    hit.chunkId(), hit.documentId(), hit.documentName(), hit.pageNumber(), (int) idx));
         }
         return citations;
     }
@@ -135,8 +146,44 @@ public class ChatService {
     public void feedback(Tenant tenant, Long conversationId, String rating, String comment) {
         Conversation conversation = conversationRepository.findByIdAndTenantId(conversationId, tenant.getId())
                 .orElseThrow(() -> new com.example.fullstack.exception.ResourceNotFoundException("问答记录不存在"));
-        conversation.setRating(Conversation.Feedback.valueOf(rating));
+        Conversation.Feedback feedback;
+        try {
+            feedback = Conversation.Feedback.valueOf(rating.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("无效的反馈类型，仅支持 USEFUL / USELESS / WRONG_CITATION");
+        }
+        conversation.setRating(feedback);
         conversation.setFeedbackComment(comment);
         conversationRepository.save(conversation);
     }
+
+    /** 问答历史（CHAT-06）：当前用户本租户的问答记录，倒序分页 */
+    public List<HistoryItem> history(Tenant tenant, User user, int page, int size) {
+        var pageable = org.springframework.data.domain.PageRequest.of(
+                Math.max(0, page), Math.min(Math.max(1, size), 100),
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "createdAt"));
+        return conversationRepository
+                .findByTenantIdAndUserIdOrderByCreatedAtDesc(tenant.getId(), user.getId(), pageable)
+                .getContent().stream()
+                .map(this::toHistoryItem)
+                .toList();
+    }
+
+    private HistoryItem toHistoryItem(Conversation conversation) {
+        List<Citation> citations = List.of();
+        try {
+            if (conversation.getCitations() != null && !conversation.getCitations().isBlank()) {
+                citations = objectMapper.readValue(conversation.getCitations(),
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, Citation.class));
+            }
+        } catch (Exception e) {
+            log.warn("解析历史引用失败, conversationId={}", conversation.getId(), e);
+        }
+        return new HistoryItem(conversation.getId(), conversation.getQuestion(), conversation.getAnswer(),
+                citations, conversation.getRating() == null ? Conversation.Feedback.NONE : conversation.getRating(),
+                conversation.getCreatedAt() == null ? null : conversation.getCreatedAt().toString());
+    }
+
+    public record HistoryItem(Long id, String question, String answer, List<Citation> citations,
+                              Conversation.Feedback rating, String createdAt) {}
 }

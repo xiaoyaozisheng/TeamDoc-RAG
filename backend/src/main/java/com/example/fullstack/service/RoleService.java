@@ -55,6 +55,9 @@ public class RoleService {
         return mapToRoleResponse(roleRepository.save(role));
     }
 
+    /** 内置角色不可改名/删除：RBAC 基线被破坏会导致权限模型失效 */
+    private static final Set<String> BUILT_IN_ROLES = Set.of("ROLE_ADMIN", "ROLE_USER");
+
     @Transactional
     public RoleResponse updateRole(Long id, RoleRequest request) {
         Role role = roleRepository.findById(id)
@@ -62,6 +65,9 @@ public class RoleService {
 
         if (request.getName() != null) {
             String newName = "ROLE_" + request.getName().toUpperCase();
+            if (BUILT_IN_ROLES.contains(role.getName()) && !role.getName().equals(newName)) {
+                throw new IllegalArgumentException("内置角色 " + role.getName() + " 不允许改名");
+            }
             if (!role.getName().equals(newName) && roleRepository.existsByName(newName)) {
                 throw new ResourceAlreadyExistsException("角色名称已存在");
             }
@@ -83,8 +89,10 @@ public class RoleService {
 
     @Transactional
     public void deleteRole(Long id) {
-        if (!roleRepository.existsById(id)) {
-            throw new ResourceNotFoundException("角色不存在");
+        Role role = roleRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("角色不存在"));
+        if (BUILT_IN_ROLES.contains(role.getName())) {
+            throw new IllegalArgumentException("内置角色 " + role.getName() + " 不允许删除");
         }
         roleRepository.deleteById(id);
     }

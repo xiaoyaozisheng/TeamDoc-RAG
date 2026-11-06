@@ -31,6 +31,15 @@ public class JwtUtil {
         return extractClaim(token, Claims::getSubject);
     }
 
+    /** 令牌类型（access/refresh）：防止 7 天 RefreshToken 被当作 API 凭证使用 */
+    public static final String CLAIM_TYPE = "type";
+    public static final String TYPE_ACCESS = "access";
+    public static final String TYPE_REFRESH = "refresh";
+
+    public String extractType(String token) {
+        return extractClaim(token, claims -> claims.get(CLAIM_TYPE, String.class));
+    }
+
     public Date extractExpiration(String token) {
         return extractClaim(token, Claims::getExpiration);
     }
@@ -56,6 +65,7 @@ public class JwtUtil {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", user.getId());
         claims.put("username", user.getDisplayName());
+        claims.put(CLAIM_TYPE, TYPE_ACCESS);
         claims.put("roles", user.getRoles().stream()
                 .map(role -> role.getName())
                 .toList());
@@ -65,6 +75,7 @@ public class JwtUtil {
     public String generateRefreshToken(User user) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", user.getId());
+        claims.put(CLAIM_TYPE, TYPE_REFRESH);
         // jti 保证同一秒内多次签发的 RefreshToken 不重复（refresh_tokens.token 有唯一索引）
         claims.put("jti", java.util.UUID.randomUUID().toString());
         return createToken(claims, user.getEmail(), jwtProperties.getRefreshExpiration());

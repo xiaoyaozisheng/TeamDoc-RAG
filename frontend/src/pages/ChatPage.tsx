@@ -9,6 +9,7 @@ interface ChatEntry {
   citations: Citation[];
   rejected: boolean;
   conversationId: number | null;
+  rating: string | null;
 }
 
 export const ChatPage = (): React.ReactNode => {
@@ -17,6 +18,25 @@ export const ChatPage = (): React.ReactNode => {
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 恢复历史问答（CHAT-06）：刷新页面后从服务端加载当前用户的问答记录
+  useEffect(() => {
+    void (async () => {
+      try {
+        const history = await chatService.history(0, 50);
+        setEntries(history.map((item) => ({
+          question: item.question,
+          answer: item.answer,
+          citations: item.citations ?? [],
+          rejected: item.answer === '资料中未找到',
+          conversationId: item.id,
+          rating: item.rating === 'NONE' ? null : item.rating,
+        })).reverse());
+      } catch {
+        // 历史加载失败不阻塞问答
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -33,7 +53,7 @@ export const ChatPage = (): React.ReactNode => {
 
     setEntries((prev) => [
       ...prev,
-      { question: trimmed, answer: '', citations: [], rejected: false, conversationId: null },
+      { question: trimmed, answer: '', citations: [], rejected: false, conversationId: null, rating: null },
     ]);
 
     let answerText = '';
@@ -60,13 +80,19 @@ export const ChatPage = (): React.ReactNode => {
     }
   }, [question, asking]);
 
-  const feedback = async (conversationId: number | null, rating: string): Promise<void> => {
+  const feedback = async (conversationId: number | null, rating: string, entryIndex: number): Promise<void> => {
     if (conversationId == null) {
       return;
     }
     try {
       await chatService.feedback(conversationId, rating);
       setError(null);
+      // 反馈成功后更新按钮态，避免重复提交同一反馈
+      setEntries((prev) => {
+        const next = [...prev];
+        next[entryIndex] = { ...next[entryIndex], rating };
+        return next;
+      });
     } catch {
       setError('反馈提交失败');
     }
@@ -85,7 +111,7 @@ export const ChatPage = (): React.ReactNode => {
           </div>
         )}
         {entries.map((entry, idx) => (
-          <div key={idx} className="space-y-2">
+          <div key={entry.conversationId ?? `new-${idx}`} className="space-y-2">
             <div className="flex justify-end">
               <div className="bg-blue-600 text-white rounded-xl px-4 py-2 max-w-[70%] whitespace-pre-wrap">
                 {entry.question}
@@ -97,7 +123,7 @@ export const ChatPage = (): React.ReactNode => {
                   entry.rejected ? 'bg-amber-50 text-amber-800' : 'bg-white shadow text-gray-800'
                 }`}
               >
-                {entry.answer || (asking ? '思考中…' : '')}
+                {entry.answer || (asking && idx === entries.length - 1 ? '思考中…' : '')}
                 {entry.citations.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-100">
                     <p className="text-xs text-gray-400 mb-1">引用来源：</p>
@@ -115,25 +141,29 @@ export const ChatPage = (): React.ReactNode => {
                   </div>
                 )}
                 {!entry.rejected && entry.conversationId != null && (
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      onClick={() => feedback(entry.conversationId, 'USEFUL')}
-                      className="text-xs px-2 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100"
-                    >
-                      有用
-                    </button>
-                    <button
-                      onClick={() => feedback(entry.conversationId, 'USELESS')}
-                      className="text-xs px-2 py-1 rounded bg-gray-50 text-gray-600 hover:bg-gray-100"
-                    >
-                      无用
-                    </button>
-                    <button
-                      onClick={() => feedback(entry.conversationId, 'WRONG_CITATION')}
-                      className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100"
-                    >
-                      引用错误
-                    </button>
+                  <div className="mt-3 flex gap-2 items-center">
+                    {(['USEFUL', 'USELESS', 'WRONG_CITATION'] as const).map((rating) => {
+                      const labels = { USEFUL: '有用', USELESS: '无用', WRONG_CITATION: '引用错误' };
+                      const styles = {
+                        USEFUL: 'bg-green-50 text-green-700 hover:bg-green-100',
+                        USELESS: 'bg-gray-50 text-gray-600 hover:bg-gray-100',
+                        WRONG_CITATION: 'bg-red-50 text-red-600 hover:bg-red-100',
+                      };
+                      return (
+                        <button
+                          key={rating}
+                          onClick={() => void feedback(entry.conversationId, rating, idx)}
+                          disabled={entry.rating != null}
+                          className={`text-xs px-2 py-1 rounded ${
+                            entry.rating === rating
+                              ? 'bg-blue-600 text-white'
+                              : styles[rating] + (entry.rating != null ? ' opacity-50 cursor-not-allowed' : '')
+                          }`}
+                        >
+                          {entry.rating === rating ? `${labels[rating]} ✓` : labels[rating]}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>

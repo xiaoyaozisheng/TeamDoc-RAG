@@ -9,6 +9,7 @@ import com.example.fullstack.entity.Role;
 import com.example.fullstack.entity.Tenant;
 import com.example.fullstack.entity.User;
 import com.example.fullstack.exception.ResourceAlreadyExistsException;
+import com.example.fullstack.exception.ResourceNotFoundException;
 import com.example.fullstack.exception.TokenRefreshException;
 import com.example.fullstack.repository.RefreshTokenRepository;
 import com.example.fullstack.repository.RoleRepository;
@@ -23,6 +24,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
@@ -73,11 +77,12 @@ public class AuthService {
                 .build();
 
         user = userRepository.save(user);
-        RefreshToken savedRefreshToken = createRefreshToken(user);
+        IssuedToken issued = createRefreshToken(user);
 
-        return buildAuthResponse(user, savedRefreshToken);
+        return buildAuthResponse(user, issued);
     }
 
+    @Transactional
     public AuthResponse login(AuthRequest request) {
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
@@ -85,17 +90,36 @@ public class AuthService {
 
         User user = (User) authentication.getPrincipal();
         auditService.log(user.getTenant(), user.getId(), "LOGIN", user.getEmail());
-        RefreshToken savedRefreshToken = createRefreshToken(user);
+        IssuedToken issued = createRefreshToken(user);
 
-        return buildAuthResponse(user, savedRefreshToken);
+        return buildAuthResponse(user, issued);
     }
 
-    @Transactional
+    /**
+     * noRollbackFor：刷新失败的分支（过期/已撤销/重放）也要把"撤销令牌"的变更提交下去——
+     * 否则事务回滚会吞掉撤销动作，重放攻击的家族撤销永远不落库。
+     */
+    @Transactional(noRollbackFor = TokenRefreshException.class)
     public AuthResponse refreshToken(String refreshTokenValue) {
-        RefreshToken storedToken = refreshTokenRepository.findByToken(refreshTokenValue)
+        // 仅 refresh 类型的 JWT 可用于刷新（与 AccessToken 同签名，需显式校验用途）
+        try {
+            if (!JwtUtil.TYPE_REFRESH.equals(jwtUtil.extractType(refreshTokenValue))) {
+                throw new TokenRefreshException("无效的刷新令牌");
+            }
+        } catch (TokenRefreshException e) {
+            throw e;
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException e) {
+            throw new TokenRefreshException("刷新令牌无效或已过期");
+        }
+
+        RefreshToken storedToken = refreshTokenRepository.findByToken(hashToken(refreshTokenValue))
                 .orElseThrow(() -> new TokenRefreshException("刷新令牌不存在或已失效"));
 
         if (storedToken.getRevoked()) {
+            // 重用检测：已轮换令牌被重放说明可能泄露，撤销该用户全部刷新令牌并审计（令牌家族保护）
+            User user = storedToken.getUser();
+            revokeAllUserTokens(user.getId());
+            auditService.log(user.getTenant(), user.getId(), "REFRESH_TOKEN_REUSE", user.getEmail());
             throw new TokenRefreshException("刷新令牌已被撤销");
         }
 
@@ -110,18 +134,38 @@ public class AuthService {
         refreshTokenRepository.save(storedToken);
 
         User user = storedToken.getUser();
-        RefreshToken newRefreshToken = createRefreshToken(user);
+        IssuedToken issued = createRefreshToken(user);
 
-        return buildAuthResponse(user, newRefreshToken);
+        return buildAuthResponse(user, issued);
     }
 
     @Transactional
     public void logout(String refreshTokenValue) {
-        refreshTokenRepository.findByToken(refreshTokenValue)
+        refreshTokenRepository.findByToken(hashToken(refreshTokenValue))
                 .ifPresent(token -> {
                     token.setRevoked(true);
                     refreshTokenRepository.save(token);
                 });
+    }
+
+    /**
+     * 自助修改密码（P1）：验证原密码后更新；成功后撤销该用户全部刷新令牌，
+     * 强制所有已登录设备重新认证（密码泄露/改密后的标准处置）。
+     */
+    @Transactional
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+            throw new IllegalArgumentException("原密码不正确");
+        }
+        if (passwordEncoder.matches(newPassword, user.getPassword())) {
+            throw new IllegalArgumentException("新密码不能与原密码相同");
+        }
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+        revokeAllUserTokens(userId);
+        auditService.log(user.getTenant(), user.getId(), "CHANGE_PASSWORD", user.getEmail());
     }
 
     @Transactional
@@ -133,7 +177,10 @@ public class AuthService {
         refreshTokenRepository.saveAll(userTokens);
     }
 
-    private RefreshToken createRefreshToken(User user) {
+    /** 签发结果：原始令牌只用于本次响应（进 Cookie），库中仅存 SHA-256 哈希 */
+    private record IssuedToken(String rawValue, RefreshToken entity) {}
+
+    private IssuedToken createRefreshToken(User user) {
         String tokenValue = jwtUtil.generateRefreshToken(user);
 
         // 限制每个用户最多5个有效刷新令牌
@@ -150,21 +197,37 @@ public class AuthService {
         }
 
         RefreshToken refreshToken = RefreshToken.builder()
-                .token(tokenValue)
+                .token(hashToken(tokenValue))
                 .user(user)
                 .expiresAt(LocalDateTime.now().plusSeconds(jwtProperties.getRefreshExpiration() / 1000))
                 .revoked(false)
                 .build();
 
-        return refreshTokenRepository.save(refreshToken);
+        return new IssuedToken(tokenValue, refreshTokenRepository.save(refreshToken));
     }
 
-    private AuthResponse buildAuthResponse(User user, RefreshToken refreshToken) {
+    private AuthResponse buildAuthResponse(User user, IssuedToken issuedToken) {
         return AuthResponse.builder()
                 .accessToken(jwtUtil.generateToken(user))
-                .refreshToken(refreshToken.getToken())
+                .refreshToken(issuedToken.rawValue())
                 .expiresIn(jwtProperties.getExpiration())
                 .tokenType("Bearer")
                 .build();
+    }
+
+    /** RefreshToken 静态加密加固：库中存 SHA-256(token)，泄露数据库不等于泄露可用令牌 */
+    private static String hashToken(String rawToken) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 }

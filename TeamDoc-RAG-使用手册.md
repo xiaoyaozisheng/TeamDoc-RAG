@@ -76,7 +76,7 @@ docker compose exec db psql -U teamdoc -d teamdoc -c "$(cat backend/src/main/res
 | 系统管理员 | `admin@example.com` | `admin123` | ROLE_ADMIN |
 | 普通成员 | `user@example.com` | `user123` | ROLE_USER |
 
-**首次登录后请立即修改默认密码**：管理员可通过 `PUT /api/v1/users/{id}`（请求体带 `password` 字段，需 `user:update` 权限）为任何账户重置密码；成员自助改密入口为 P1 能力，当前请联系管理员重置。
+**首次登录后请立即修改默认密码**：登录后点击右上角「**修改密码**」自助完成（需验证原密码；修改成功后所有已登录设备自动退出，需重新登录）。管理员也可通过 `PUT /api/v1/users/{id}`（请求体带 `password` 字段，需 `user:update` 权限）为任何账户重置密码。
 
 登录流程说明：
 
@@ -210,9 +210,14 @@ docker compose exec db psql -U teamdoc -d teamdoc -c "$(cat backend/src/main/res
 
 `GET /api/v1/admin/logs/audit`：记录登录、文档删除等关键动作（操作者、租户、时间）。
 
-### 6.4 AI Provider 查看
+### 6.4 AI Provider 配置（页面可视化）
 
-`GET /api/v1/admin/providers`：查看当前 Embedding/LLM 供应商与模型名，API Key 脱敏展示（只显示前 4 位 + `****`）。修改 Provider 通过环境变量/配置文件（第 10 节），不在页面修改。
+前端「**系统管理**」页（仅 ROLE_ADMIN 可见）或 API `GET/PUT /api/v1/admin/providers`：
+
+- **查看**：当前 Embedding/LLM 供应商、模型、Base URL，API Key 脱敏展示（只显示前 4 位 + `****`，原文永不回传）；
+- **修改**：`PUT` 直接热生效——供应商（hashing/extractive ↔ openai）、模型、Base URL、API Key（留空保持不变）、超时、Reranker 开关；
+- **持久化**：配置存入 `app_settings` 表，服务重启后自动恢复；
+- **切换 Embedding 模型**：响应返回 `reindexRequired=true`，请到「文档管理」对各文档执行"重新入库"，否则旧向量与新模型不可比，检索质量会下降。
 
 ### 6.5 租户管理
 

@@ -57,6 +57,8 @@ rag:
     vector-candidates: 20
     keyword-candidates: 20
     min-relevance: 0.35      # 证据充分性阈值（向量余弦）：低于该值拒答；随 Embedding 模型调整
+    reranker-enabled: false  # RET-07 重排开关：开启后对融合候选（rerank-candidates）重排取 top-k
+    rerank-candidates: 20
   keyword-engine: h2         # h2（LIKE 兜底）| pg（tsvector）
   pgvector:
     enabled: false           # postgres Profile 下为 true：向量写入 vector_store 并用 <=> 检索
@@ -71,6 +73,9 @@ jwt:
   expiration: 900000             # AccessToken 15 分钟：JWT 无法服务端作废，泄露后攻击窗口必须短
   refresh-expiration: 604800000  # RefreshToken 7 天
   cookie-secure: false           # RefreshToken Cookie 的 Secure 标记；生产（HTTPS）必须为 true
+
+security:
+  dev-endpoints-enabled: true    # 开发端点（H2 控制台/Swagger）；postgres/prod Profile 下强制关闭
 
 cors:
   allowed-origins: http://localhost:5173,http://localhost:3000
@@ -126,7 +131,10 @@ cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
 jwt:
-  cookie-secure: true
+  cookie-secure: ${COOKIE_SECURE:true}   # 纯 HTTP 的 Compose 部署可设 COOKIE_SECURE=false；有 TLS 的生产必须为 true
+
+security:
+  dev-endpoints-enabled: false
 
 rag:
   keyword-engine: pg
@@ -146,7 +154,10 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET:}
-  cookie-secure: true
+  cookie-secure: ${COOKIE_SECURE:true}
+
+security:
+  dev-endpoints-enabled: false
 
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:}

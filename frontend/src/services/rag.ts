@@ -43,6 +43,62 @@ export const retrievalService = {
   },
 };
 
+// ===== 系统管理（SYS-03，仅 ADMIN） =====
+
+export interface ProviderConfigView {
+  embedding: {
+    provider: string;
+    dimensions: number;
+    model: string;
+    baseUrl: string;
+    apiKeyMasked: string;
+  };
+  llm: {
+    provider: string;
+    model: string;
+    baseUrl: string;
+    apiKeyMasked: string;
+  };
+  rerankerEnabled: boolean;
+}
+
+export interface ProviderConfigUpdate {
+  embedding?: Partial<{
+    provider: string;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    dimensions: number;
+  }>;
+  llm?: Partial<{
+    provider: string;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    timeoutSeconds: number;
+  }>;
+  /** RET-07 检索重排开关 */
+  rerankerEnabled?: boolean;
+}
+
+export const adminService = {
+  getProviders: async (): Promise<ProviderConfigView> => {
+    const response = await api.get<ProviderConfigView>('/v1/admin/providers');
+    return response.data;
+  },
+
+  /** 返回 reindexRequired 标记与更新后的配置视图 */
+  updateProviders: async (
+    payload: ProviderConfigUpdate,
+  ): Promise<{ reindexRequired: boolean; config: ProviderConfigView }> => {
+    const response = await api.put<{ reindexRequired: boolean; config: ProviderConfigView }>(
+      '/v1/admin/providers',
+      payload,
+    );
+    return response.data;
+  },
+};
+
 export const evalService = {
   listQuestions: async (): Promise<EvalQuestionItem[]> => {
     const response = await api.get<EvalQuestionItem[]>('/v1/eval/questions');
