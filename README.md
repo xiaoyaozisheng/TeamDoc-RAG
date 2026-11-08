@@ -31,7 +31,7 @@
 - **路由**: React Router 6
 - **样式**: TailwindCSS 3（边距/颜色）+ **Ant Design 6**（表格/表单组件）
 - **HTTP客户端**: Axios（含Token自动刷新）
-- **图表**: ECharts 6 + echarts-for-react（答辩大屏）
+- **图表**: ECharts 6 + echarts-for-react（数据可视化大屏）
 
 ---
 
