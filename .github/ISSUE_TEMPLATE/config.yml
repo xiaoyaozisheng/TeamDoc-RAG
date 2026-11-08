@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/xiaoyaozisheng/TeamDoc-RAG/security/advisories/new
+    about: 请勿公开提交漏洞，使用私密安全建议渠道

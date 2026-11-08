@@ -1,0 +1,56 @@
+name: 缺陷报告 (Bug Report)
+description: 报告一个可复现的问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请先确认：该问题在最新 `main` 分支上仍然存在，且未被已有 Issue 覆盖。
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从零开始的具体操作步骤
+      placeholder: |
+        1. 以 admin 登录
+        2. 上传 xxx.pdf
+        3. 提问"……"
+        4. 出现错误
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 请附后端日志关键片段（注意隐去密钥与真实数据）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: 运行 Profile
+      options:
+        - h2（开发默认）
+        - postgres
+        - prod
+        - Docker Compose
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境信息
+      description: 操作系统 / JDK 版本 / Node 版本
+    validations:
+      required: true

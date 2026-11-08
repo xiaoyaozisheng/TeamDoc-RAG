@@ -1,5 +1,18 @@
 # TeamDoc RAG（Spring Boot + React）
 
+<div align="center">
+
+![CI](https://github.com/xiaoyaozisheng/TeamDoc-RAG/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Java](https://img.shields.io/badge/Java-17-orange.svg)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.5-brightgreen.svg)
+![React](https://img.shields.io/badge/React-18-61dafb.svg)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-blue.svg)
+
+[English](README.en.md) | 简体中文
+
+</div>
+
 **面向小团队的轻量级知识库 + RAG 智能问答助手**：资料可管、检索可准、回答可溯源、权限不穿透、私有化可部署。
 
 团队成员上传文档后，系统自动解析、切片、向量化；成员用自然语言提问，系统基于有权限的文档片段回答，并给出可点击的引用来源；资料不足时明确拒答。
@@ -8,7 +21,10 @@
 |------|------|------|
 | [使用手册](TeamDoc-RAG-使用手册.md) | 安装部署、功能操作、配置参考、FAQ、运维 | 使用者 / 运维 |
 | 本文档（README） | 技术总览、架构、API、开发规范 | 开发者 |
+| [English](README.en.md) | English quick start & overview | Developers |
 | [产品需求文档](TeamDoc-RAG-PRD.md) | 需求定义、验收标准、交付状态对照 | 产品 / 项目管理 |
+| [贡献指南](CONTRIBUTING.md) | 环境搭建、提交规范、PR 流程 | 贡献者 |
+| [安全策略](SECURITY.md) | 漏洞报告渠道与支持版本 | 安全研究者 |
 
 ---
 
