@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,8 +20,13 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * 切片测试不会执行主应用的组件扫描，JPA 审计配置必须显式导入，
+ * 否则 @CreatedDate/@LastModifiedDate 不填充（CI 上以 NULL 违反非空约束）。
+ */
 @DataJpaTest
 @Transactional
+@Import(com.example.fullstack.config.JpaAuditingConfig.class)
 class UserRepositoryTest {
 
     @TestConfiguration
